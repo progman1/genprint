@@ -28,7 +28,7 @@ let printnl x =
     Genprint.prs "polymorphic and not very useful" x;
     print_endline()
     
-let _= f 0
+let _= printnl 0
 ```
 ```
 polymorphic and not very useful =>

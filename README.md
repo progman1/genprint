@@ -5,13 +5,14 @@ exactly as is seen from the interactive toplevel. The difference is that a value
 out from anywhere in the program rather than only for the end result.
 
 
-```
+``` ocaml
 open Genprint
 (* prs requires both arguments. *)
 let _=
     prs "random value" [[[0,1]]];
     prs "random value" (true,"true")
-
+```
+```
 random value =>
 [[[(0, 1)]]]
 random value =>
@@ -28,6 +29,7 @@ let printnl x =
     print_endline()
     
 let _= f 0
+```
 ```
 polymorphic and not very useful =>
 <poly>

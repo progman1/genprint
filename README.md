@@ -55,6 +55,9 @@ make coldstart depend
 make world world.opt install
 ```
 
+The patches are against ocaml version 4.07.1 but easily adjusted for other versions.
+
+
 The switch contains both toplevel and compiler patches but this is only for demo'ing - the compiler
 patch (in addition to the common patch) is sufficient for toplevel operation as well.
 The reason there is a separate toplevel patch is that it is trivial, making use of existing

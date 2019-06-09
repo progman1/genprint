@@ -19,6 +19,23 @@ random value =>
 - : unit = ()
 ```
 
+It relies on capturing the type of the value at the point of use in the program and as such
+it is not useful to bury such statements within polymorhic functions:
+
+``` ocaml
+let printnl x = 
+    Genprint.prs "polymorpic and not very useful" x;
+    print_endline()
+    
+let _= f 0
+polymorphic and not very useful =>
+<poly>
+- : unit = ()
+```
+
+So use only where the type is partially or completely inferred.
+
+
 For some control, as Toplevel, there is:
 
 ``` ocaml

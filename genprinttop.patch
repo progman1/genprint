@@ -22,9 +22,11 @@
  
  LIBFILES=stdlib.cma std_exit.cmo *.cmi camlheader
  
---- ocaml/toplevel/genprint.ml	2019-06-09 12:38:06.591300279 +0100
-+++ ../ocaml/toplevel/genprint.ml	2019-06-09 07:32:43.507707468 +0100
-@@ -0,0 +1,43 @@
+--- ocaml/toplevel/genprint.ml	2019-06-09 19:04:50.954007796 +0100
++++ ../ocaml/toplevel/genprint.ml	2019-06-09 19:02:08.775006988 +0100
+@@ -0,0 +1,46 @@
++(* abstracted type for ocaml type representation *)
++type t = int
 +
 +
 +(* a registry of types and their environments *)
@@ -34,8 +36,9 @@
 +let create_key_for_type (ty,env)=
 +  let h=Hashtbl.hash ty in
 +  Hashtbl.add tyhash h (ty,env);
-+  (* now string to be compat with compiler version... Lambda.(Lconst(Const_pointer h)) *)
-+  Lambda.(Lconst(Const_immstring (string_of_int h)))
++  Lambda.(Lconst(Const_pointer h))
++  (* now string to be compat with compiler version... but no need, make abstract in mli.*)
++  (* Lambda.(Lconst(Const_immstring (string_of_int h))) *)
 +
 +(*
 +  let outv = outval_of_value env v ty in
@@ -55,7 +58,7 @@
 +let prs_with_type tyh s v =
 +  let ty,env=
 +    try
-+      Hashtbl.find tyhash (int_of_string tyh)
++      Hashtbl.find tyhash (tyh)
 +  with Not_found->
 +    failwith "unknown type key. Cannot use toplevel with the compiler."
 +  in
@@ -68,9 +71,9 @@
 +let _=
 +  Translprim.register_typeof_func ~path:"Genprint.prs" create_key_for_type
 +
---- ocaml/toplevel/genprint.mli	2019-06-09 12:38:06.591300279 +0100
-+++ ../ocaml/toplevel/genprint.mli	2019-06-09 07:56:16.772897149 +0100
-@@ -0,0 +1,9 @@
+--- ocaml/toplevel/genprint.mli	2019-06-09 19:04:50.954007796 +0100
++++ ../ocaml/toplevel/genprint.mli	2019-06-09 18:50:54.539415195 +0100
+@@ -0,0 +1,11 @@
 +(* depth/steps initialised from Toploop versions *)
 +val max_printer_depth : int ref
 +val max_printer_steps : int ref
@@ -79,4 +82,6 @@
 +
 +(* [prs msg value] prints an arbitrary value, and <poly> for those parts yet polymorphic *)
 +external prs : string -> 'a -> unit = "%typeof"
-+val prs_with_type : string -> string -> Obj.t -> unit
++(* abstracted type for ocaml type representation *)
++type t
++val prs_with_type : t -> string -> Obj.t -> unit

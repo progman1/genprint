@@ -30,8 +30,8 @@ Binary files ocaml/otherlibs/genprint/genprint.cmt and ../ocaml/otherlibs/genpri
 Binary files ocaml/otherlibs/genprint/genprint.cmti and ../ocaml/otherlibs/genprint/genprint.cmti differ
 diff -Nu ocaml/otherlibs/genprint/genprint.ml ../ocaml/otherlibs/genprint/genprint.ml
 --- ocaml/otherlibs/genprint/genprint.ml	1970-01-01 01:00:00.000000000 +0100
-+++ ../ocaml/otherlibs/genprint/genprint.ml	2019-06-07 11:41:10.919908408 +0100
-@@ -0,0 +1,318 @@
++++ ../ocaml/otherlibs/genprint/genprint.ml	2019-06-09 18:53:51.088201721 +0100
+@@ -0,0 +1,321 @@
 +(**************************************************************************)
 +(*                                                                        *)
 +(*                                 OCaml                                  *)
@@ -52,6 +52,9 @@ diff -Nu ocaml/otherlibs/genprint/genprint.ml ../ocaml/otherlibs/genprint/genpri
 +open Types
 +open Outcometree
 +open Genprinti
++
++(* abstracted type for ocaml type representation *)
++type t = string
 +
 +(* let pp fmt = Printf.kfprintf (fun ch-> Printf.fprintf ch "\n"; flush stdout) stdout fmt *)
 +
@@ -352,15 +355,17 @@ diff -Nu ocaml/otherlibs/genprint/genprint.ml ../ocaml/otherlibs/genprint/genpri
 +
 diff -Nu ocaml/otherlibs/genprint/genprint.mli ../ocaml/otherlibs/genprint/genprint.mli
 --- ocaml/otherlibs/genprint/genprint.mli	1970-01-01 01:00:00.000000000 +0100
-+++ ../ocaml/otherlibs/genprint/genprint.mli	2019-06-09 12:01:57.327019210 +0100
-@@ -0,0 +1,7 @@
++++ ../ocaml/otherlibs/genprint/genprint.mli	2019-06-09 18:53:08.208491142 +0100
+@@ -0,0 +1,9 @@
 +val max_printer_depth : int ref
 +val max_printer_steps : int ref
 +val ppf : Format.formatter ref
 +
 +(* [prs msg value] prints an arbitrary value, and <poly> for those parts yet polymorphic *)
 +external prs : string -> 'a -> unit = "%typeof"
-+val prs_with_type : string -> string -> Obj.t -> unit
++(* abstracted type for ocaml type representation *)
++type t
++val prs_with_type : t -> string -> Obj.t -> unit
 diff -Nu ocaml/otherlibs/genprint/Makefile ../ocaml/otherlibs/genprint/Makefile
 --- ocaml/otherlibs/genprint/Makefile	1970-01-01 01:00:00.000000000 +0100
 +++ ../ocaml/otherlibs/genprint/Makefile	2019-06-09 12:36:52.081532721 +0100
@@ -481,7 +486,7 @@ diff -Nu ocaml/otherlibs/genprint/.merlin ../ocaml/otherlibs/genprint/.merlin
 @@ -0,0 +1,2 @@
 +S ../ocaml
 +B ../ocaml
---- ocaml/bytecomp/genprint0.ml	2019-06-09 12:38:06.511300532 +0100
+--- ocaml/bytecomp/genprint0.ml	2019-06-09 19:04:50.874008285 +0100
 +++ ../ocaml/bytecomp/genprint0.ml	2019-06-07 05:38:07.089916718 +0100
 @@ -0,0 +1,282 @@
 +open Misc
@@ -766,11 +771,11 @@ diff -Nu ocaml/otherlibs/genprint/.merlin ../ocaml/otherlibs/genprint/.merlin
 +
 +let _=
 +  Translprim.register_typeof_func ~path:"Genprint.prs" type_to_lambda
---- ocaml/bytecomp/genprint0.mli	2019-06-09 12:38:06.511300532 +0100
+--- ocaml/bytecomp/genprint0.mli	2019-06-09 19:04:50.874008285 +0100
 +++ ../ocaml/bytecomp/genprint0.mli	2019-06-06 14:48:35.799937078 +0100
 @@ -0,0 +1 @@
 +(*empty*)
---- ocaml/bytecomp/genprinti.ml	2019-06-09 12:38:06.511300532 +0100
+--- ocaml/bytecomp/genprinti.ml	2019-06-09 19:04:50.874008285 +0100
 +++ ../ocaml/bytecomp/genprinti.ml	2019-06-06 12:13:10.199940635 +0100
 @@ -0,0 +1,20 @@
 +open Outcometree
@@ -793,7 +798,7 @@ diff -Nu ocaml/otherlibs/genprint/.merlin ../ocaml/otherlibs/genprint/.merlin
 +  | Xval_tuple of x_value list
 +  | Xval_variant of (int * (Asttypes.label * x_value option)) list
 +
---- ocaml/configure	2019-06-09 12:17:47.244375430 +0100
+--- ocaml/configure	2019-06-09 19:04:39.004080976 +0100
 +++ ../ocaml/configure	2019-06-08 19:58:52.134890710 +0100
 @@ -1236,7 +1236,7 @@
  config UNIXLIB "$unixlib"

@@ -24,7 +24,7 @@ it is not useful to bury such statements within polymorhic functions:
 
 ``` ocaml
 let printnl x = 
-    Genprint.prs "polymorpic and not very useful" x;
+    Genprint.prs "polymorphic and not very useful" x;
     print_endline()
     
 let _= f 0

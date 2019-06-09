@@ -1,0 +1,82 @@
+--- ocaml/Makefile	2019-06-08 10:53:57.676123430 +0100
++++ ../ocaml/Makefile	2019-06-08 18:36:04.318788593 +0100
+@@ -257,10 +259,10 @@
+   middle_end/flambda_invariants.cmo \
+   middle_end/middle_end.cmo
+ 
+-TOPLEVEL=toplevel/genprintval.cmo toplevel/toploop.cmo \
++TOPLEVEL=toplevel/genprintval.cmo toplevel/toploop.cmo toplevel/genprint.cmo \
+   toplevel/trace.cmo toplevel/topdirs.cmo toplevel/topmain.cmo
+ 
+-OPTTOPLEVEL=toplevel/genprintval.cmo toplevel/opttoploop.cmo \
++OPTTOPLEVEL=toplevel/genprintval.cmo toplevel/opttoploop.cmo toplevel/genprint.cmo \
+   toplevel/opttopdirs.cmo toplevel/opttopmain.cmo
+ BYTESTART=driver/main.cmo
+ 
+@@ -270,7 +272,7 @@
+ 
+ OPTTOPLEVELSTART=toplevel/opttopstart.cmo
+ 
+-PERVASIVES=$(STDLIB_MODULES) outcometree topdirs toploop
++PERVASIVES=$(STDLIB_MODULES) outcometree topdirs toploop genprint
+ 
+ LIBFILES=stdlib.cma std_exit.cmo *.cmi camlheader
+ 
+--- ocaml/toplevel/genprint.ml	2019-06-09 12:20:29.433770740 +0100
++++ ../ocaml/toplevel/genprint.ml	2019-06-09 07:32:43.507707468 +0100
+@@ -0,0 +1,43 @@
++
++
++(* a registry of types and their environments *)
++let tyhash=Hashtbl.create 5
++
++(* record the type/env and return the hash for later retrieval *)
++let create_key_for_type (ty,env)=
++  let h=Hashtbl.hash ty in
++  Hashtbl.add tyhash h (ty,env);
++  (* now string to be compat with compiler version... Lambda.(Lconst(Const_pointer h)) *)
++  Lambda.(Lconst(Const_immstring (string_of_int h)))
++
++(*
++  let outv = outval_of_value env v ty in
++  let pty = Printtyp.tree_of_type_scheme ty in
++  let it = Outcometree.Ophr_eval (outv, pty) in
++  !Toploop.print_out_phrase ppf it
++*)
++
++let max_printer_depth = ref !Toploop.max_printer_depth
++let max_printer_steps = ref !Toploop.max_printer_steps
++let ppf= ref Format.std_formatter
++
++(* the print format is limited and ugly - ideal for dissuading users from actually using this
++for anything other than debugging. *)
++external prs: string -> 'a -> unit = "%typeof" (* fake primitive used so as to not slow down the compiler in general. *)
++(* the above fake primitive gets redirected here: *)
++let prs_with_type tyh s v =
++  let ty,env=
++    try
++      Hashtbl.find tyhash (int_of_string tyh)
++  with Not_found->
++    failwith "unknown type key. Cannot use toplevel with the compiler."
++  in
++  let ppf = ! ppf in
++  Format.fprintf ppf "%s =>\n" s;
++  Toploop.print_value env v ppf ty;
++  Format.fprintf ppf "@."
++
++(* this will overwrite the internal handler of this name if present *)
++let _=
++  Translprim.register_typeof_func ~path:"Genprint.prs" create_key_for_type
++
+--- ocaml/toplevel/genprint.mli	2019-06-09 12:20:29.433770740 +0100
++++ ../ocaml/toplevel/genprint.mli	2019-06-09 07:56:16.772897149 +0100
+@@ -0,0 +1,9 @@
++(* depth/steps initialised from Toploop versions *)
++val max_printer_depth : int ref
++val max_printer_steps : int ref
++(* initialised to std_formatter *)
++val ppf : Format.formatter ref
++
++(* [prs msg value] prints an arbitrary value, and <poly> for those parts yet polymorphic *)
++external prs : string -> 'a -> unit = "%typeof"
++val prs_with_type : string -> string -> Obj.t -> unit

@@ -1,0 +1,141 @@
+--- ocaml/bytecomp/translprim.ml	2019-06-09 12:17:47.204375576 +0100
++++ ../ocaml/bytecomp/translprim.ml	2019-06-08 11:01:57.412671619 +0100
+@@ -26,6 +26,7 @@
+ type error =
+   | Unknown_builtin_primitive of string
+   | Wrong_arity_builtin_primitive of string
++  | Wrong_arity of string
+ 
+ exception Error of Location.t * error
+ 
+@@ -337,14 +338,29 @@
+   "%compare", Comparison(Compare, Compare_generic);
+ ]
+ 
++(* abusing the primitive facility to extract type information,
++ but this way has the merit of not slowing down the compiler in general. *)
++
++(* a better way would be to create a new Translprim.prim or Lambda.primitve constructor. *)
++exception Typeof
++
+ let lookup_primitive loc p env path =
+   match Hashtbl.find primitives_table p.prim_name with
+   | prim -> prim
+   | exception Not_found ->
++     if p.prim_name="%typeof" then 
++       raise (Typeof)
++     else
+       if String.length p.prim_name > 0 && p.prim_name.[0] = '%' then
+         raise(Error(loc, Unknown_builtin_primitive p.prim_name));
+       add_used_primitive loc env path;
+       Primitive (Pccall p)
++(* some flexibility here...
++     try
++       let _n= Scanf.sscanf p.prim_name "%%typeof %s" (fun n->n) in
++       raise (Typeof)
++     with Scanf.Scan_failure _ ->
++*)
+ 
+ let simplify_constant_constructor = function
+   | Equal -> true
+@@ -670,9 +686,20 @@
+     | Send | Send_self | Send_cache), _ ->
+       raise(Error(loc, Wrong_arity_builtin_primitive prim_name))
+ 
++
++(* register a callback function corresponding to that defined as a %typeof primitive by way of it's
++path.
++ *)
++
++let typeof_func_hash = Hashtbl.create 5
++
++let register_typeof_func ~path:pstring func =
++  Hashtbl.replace typeof_func_hash pstring func
++
+ (* Eta-expand a primitive *)
+ 
+ let transl_primitive loc p env ty path =
++ try
+   let prim = lookup_primitive loc p env path in
+   let has_constant_constructor = false in
+   let prim =
+@@ -694,6 +721,10 @@
+                  loc = loc;
+                  body = body; }
+ 
++ with Typeof->
++    (* being here means not all args were supplied. *)
++    raise(Error(loc, Wrong_arity (match path with Some p -> Printtyp.string_of_path p | None -> "?")))
++
+ (* Determine if a primitive is a Pccall or will be turned later into
+    a C function call that may raise an exception *)
+ let primitive_is_ccall = function
+@@ -711,6 +742,7 @@
+   | Raise _ | Raise_with_backtrace | Loc _ -> false
+ 
+ let transl_primitive_application loc p env ty path exp args arg_exps =
++ try
+   let prim = lookup_primitive loc p env (Some path) in
+   let has_constant_constructor =
+     match arg_exps with
+@@ -737,6 +769,32 @@
+   in
+   lam
+ 
++ with Typeof->
++    (* assume whatever function is using %typeof, that the last argument's type is required   *)
++    let earg =List.hd (List.rev arg_exps) in
++    let pstring = Printtyp.string_of_path path in
++    let lam= try
++        let func = Hashtbl.find typeof_func_hash pstring in 
++        func (earg.exp_type, env)
++      with Not_found->
++        (* raise(Error(loc, )) *)
++        failwith ("Function has no handler for %typeof result: "^ pstring)
++    in
++    let open Path in
++    let redirect =function 
++      | Pdot(m,f,i) -> Pdot(m,f^"_with_type",i)
++      | _-> assert false
++    in
++    let path = redirect path in
++    let funlam=transl_value_path ~loc env path in
++    let tyarg= lam in
++    Lapply {ap_should_be_tailcall=false;
++            ap_loc=loc;
++            ap_func=funlam;
++            ap_args=tyarg::args;
++            ap_inlined=Never_inline;
++            ap_specialised=Never_specialise;}
++
+ (* Error report *)
+ 
+ open Format
+@@ -746,6 +804,8 @@
+       fprintf ppf "Unknown builtin primitive \"%s\"" prim_name
+   | Wrong_arity_builtin_primitive prim_name ->
+       fprintf ppf "Wrong arity for builtin primitive \"%s\"" prim_name
++  | Wrong_arity func_name ->
++      fprintf ppf "Function requires all arguments be supplied: \"%s\"" func_name
+ 
+ let () =
+   Location.register_error_of_exn
+--- ocaml/bytecomp/translprim.mli	2019-06-09 12:17:47.204375576 +0100
++++ ../ocaml/bytecomp/translprim.mli	2019-06-06 19:52:36.069930120 +0100
+@@ -27,6 +27,8 @@
+ val clear_used_primitives : unit -> unit
+ val get_used_primitives: unit -> Path.t list
+ 
++val register_typeof_func: path:string -> (Types.type_expr * Env.t -> Lambda.lambda) -> unit
++
+ val transl_primitive :
+   Location.t -> Primitive.description -> Env.t ->
+   Types.type_expr -> Path.t option -> Lambda.lambda
+@@ -41,6 +43,7 @@
+ type error =
+   | Unknown_builtin_primitive of string
+   | Wrong_arity_builtin_primitive of string
++  | Wrong_arity of string
+ 
+ exception Error of Location.t * error
+ 

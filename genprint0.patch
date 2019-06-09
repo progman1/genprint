@@ -1,0 +1,805 @@
+--- ocaml/Makefile	2019-06-08 10:53:57.676123430 +0100
++++ ../ocaml/Makefile	2019-06-08 18:36:04.318788593 +0100
+@@ -68,6 +68,7 @@
+ COMPFLAGS=-strict-sequence -principal -absname -w +a-4-9-41-42-44-45-48 \
+ 	  -warn-error A \
+           -bin-annot -safe-string -strict-formats $(INCLUDES)
++export COMPFLAGS
+ LINKFLAGS=
+ 
+ ifeq "$(strip $(NATDYNLINKOPTS))" ""
+@@ -120,6 +121,7 @@
+   bytecomp/switch.cmo bytecomp/matching.cmo \
+   bytecomp/translobj.cmo bytecomp/translattribute.cmo \
+   bytecomp/translprim.cmo bytecomp/translcore.cmo \
++  bytecomp/genprint0.cmo bytecomp/genprinti.cmo \
+   bytecomp/translclass.cmo bytecomp/translmod.cmo \
+   bytecomp/simplif.cmo bytecomp/runtimedef.cmo \
+   bytecomp/meta.cmo bytecomp/opcodes.cmo \
+diff -Nu ocaml/otherlibs/genprint/.depend ../ocaml/otherlibs/genprint/.depend
+--- ocaml/otherlibs/genprint/.depend	1970-01-01 01:00:00.000000000 +0100
++++ ../ocaml/otherlibs/genprint/.depend	2019-06-07 06:04:16.929916119 +0100
+@@ -0,0 +1,3 @@
++genprint.cmo : genprint.cmi
++genprint.cmx : genprint.cmi
++genprint.cmi :
+Binary files ocaml/otherlibs/genprint/genprint.cma and ../ocaml/otherlibs/genprint/genprint.cma differ
+Binary files ocaml/otherlibs/genprint/genprint.cmi and ../ocaml/otherlibs/genprint/genprint.cmi differ
+Binary files ocaml/otherlibs/genprint/genprint.cmo and ../ocaml/otherlibs/genprint/genprint.cmo differ
+Binary files ocaml/otherlibs/genprint/genprint.cmt and ../ocaml/otherlibs/genprint/genprint.cmt differ
+Binary files ocaml/otherlibs/genprint/genprint.cmti and ../ocaml/otherlibs/genprint/genprint.cmti differ
+diff -Nu ocaml/otherlibs/genprint/genprint.ml ../ocaml/otherlibs/genprint/genprint.ml
+--- ocaml/otherlibs/genprint/genprint.ml	1970-01-01 01:00:00.000000000 +0100
++++ ../ocaml/otherlibs/genprint/genprint.ml	2019-06-07 11:41:10.919908408 +0100
+@@ -0,0 +1,318 @@
++(**************************************************************************)
++(*                                                                        *)
++(*                                 OCaml                                  *)
++(*                                                                        *)
++(*  Xavier Leroy and Jerome Vouillon, projet Cristal, INRIA Rocquencourt  *)
++(*                                                                        *)
++(*   Copyright 1996 Institut National de Recherche en Informatique et     *)
++(*     en Automatique.                                                    *)
++(*                                                                        *)
++(*   All rights reserved.  This file is distributed under the terms of    *)
++(*   the GNU Lesser General Public License version 2.1, with the          *)
++(*   special exception on linking described in the file LICENSE.          *)
++(*                                                                        *)
++(**************************************************************************)
++
++(* To print values *)
++
++open Types
++open Outcometree
++open Genprinti
++
++(* let pp fmt = Printf.kfprintf (fun ch-> Printf.fprintf ch "\n"; flush stdout) stdout fmt *)
++
++
++
++(* an intermediate repr prior to Outcometree.out_value that allows to eliminate the
++type and its environment without yet supplying the obj for decomposing.
++a further stage then uses it to guide decomposition of an obj, turns out an outcome for Oprint to
++handle as before. 
++
++the value is no longer being used to drive the unfolding of its type structure - the x_value is
++doing it and that means it must capture the recursion of the underlying types.
++the mutable reference is used to encode cyclicity.
++
++replacing the tree-walking function outval_of_value with a data structure allows its easy embedding
++into lambda, in contrast to the toplevel version which more simply records the type/env and stores
++a key to it in the program lambda.
++ *)
++
++module type OBJ =
++  sig
++    type t
++    val repr : 'a -> t
++    val obj : t -> 'a
++    val is_block : t -> bool
++    val tag : t -> int
++    val size : t -> int
++    val field : t -> int -> t
++    val double_array_tag : int
++    val double_field : t -> int -> float
++  end
++
++
++
++(********************************************************************************)
++module Make(O : OBJ) = struct
++
++    (* type t = O.t *)
++
++    module ObjTbl = Hashtbl.Make(struct
++        type t = O.t
++        let equal = (==)
++        let hash x =
++          try
++            Hashtbl.hash x
++          with _exn -> 0
++      end)
++
++
++   
++    (* The main printing function *)
++
++    let outval_of_value max_steps max_depth check_depth obj x =
++
++      let printer_steps = ref max_steps in
++
++      let nested_values = ObjTbl.create 8 in
++      let nest_gen err f depth obj x =
++        let repr = obj in
++        if not (O.is_block repr) then
++          f depth obj x
++        else
++          if ObjTbl.mem nested_values repr then
++            err
++          else begin
++            ObjTbl.add nested_values repr ();
++            let ret = f depth obj x in
++            ObjTbl.remove nested_values repr;
++            ret
++          end
++      in
++
++      let nest f = nest_gen (Oval_stuff "<cycle>") f in
++
++      let rec find_constr tag num_const num_nonconst = function
++          [] ->
++           raise Not_found
++        | _, [] as c  :: rem ->
++           if tag = Cstr_constant num_const
++           then c
++           else find_constr tag (num_const + 1) num_nonconst rem
++        | c :: rem ->
++           if tag = Cstr_block num_nonconst || tag = Cstr_unboxed
++           then c
++           else find_constr tag num_const (num_nonconst + 1) rem
++      in
++      let find_constr_by_tag tag cstrlist =
++        find_constr tag 0 0 cstrlist
++      in
++
++      let rec tree_of_val depth obj x_val =
++        decr printer_steps;
++        if !printer_steps < 0 || depth < 0 then Oval_ellipsis
++        else begin
++            match x_val with
++            | Xval_ellipsis -> Oval_ellipsis
++
++            | Xval_int -> Oval_int (O.obj obj)
++            | Xval_float -> Oval_float (O.obj obj)
++            | Xval_char-> Oval_char (O.obj obj)
++            | Xval_int32-> Oval_int32 (O.obj obj)
++            | Xval_nativeint -> Oval_nativeint (O.obj obj)
++            | Xval_int64 -> Oval_int64 (O.obj obj)
++
++            | Xval_stuff s ->
++               Oval_stuff s
++            | Xval_tuple(x_val_list) ->
++               Oval_tuple (tree_of_val_list 0 depth obj x_val_list)
++            | Xval_list x_arg ->
++               if O.is_block obj then
++                 match check_depth depth obj x_val with
++                   Some x -> x
++                 | None ->
++                    let rec tree_of_conses tree_list depth obj x_arg =
++                      if !printer_steps < 0 || depth < 0 then
++                        Oval_ellipsis :: tree_list
++                      else if O.is_block obj then
++                        let tree =
++                          nest tree_of_val (depth - 1) (O.field obj 0) x_arg
++                        in
++                        let next_obj = O.field obj 1 in
++                        nest_gen (Oval_stuff "<cycle>" :: tree :: tree_list)
++                          (tree_of_conses (tree :: tree_list))
++                          depth next_obj x_arg
++                      else tree_list
++                    in
++                    Oval_list (List.rev (tree_of_conses [] depth obj !x_arg))
++               else
++                 Oval_list []
++            | Xval_array x_arg ->
++               let length = O.size obj in
++               if length > 0 then
++                 let rec tree_of_items tree_list i =
++                   if !printer_steps < 0 || depth < 0 then
++                     Oval_ellipsis :: tree_list
++                   else if i < length then
++                     let tree =
++                       nest tree_of_val (depth - 1) (O.field obj i) !x_arg
++                     in
++                     tree_of_items (tree :: tree_list) (i + 1)
++                   else tree_list
++                 in
++                 Oval_array (List.rev (tree_of_items [] 0))
++               else
++                 Oval_array []
++
++            | Xval_string Ostr_string ->
++               Oval_string ((O.obj obj : string), !printer_steps, Ostr_string)
++
++            | Xval_string Ostr_bytes ->
++               let s = Bytes.to_string (O.obj obj : bytes) in
++               Oval_string (s, !printer_steps, Ostr_bytes)
++
++            | Xval_constr ([Oide_ident "lazy",[x_arg]],_) -> 
++               let obj_tag = O.tag obj in
++               if obj_tag = Obj.lazy_tag then Oval_stuff "<lazy>"
++               else begin
++                   let forced_obj =
++                     if obj_tag = Obj.forward_tag then O.field obj 0 else obj
++                   in
++                   let v =
++                     if obj_tag = Obj.forward_tag
++                     then nest tree_of_val depth forced_obj !x_arg
++                     else      tree_of_val depth forced_obj !x_arg
++                   in
++                   Oval_constr (Oide_ident "lazy", [v])
++                 end
++            | Xval_constr (cl,unbx) ->begin
++               let tag =
++                 if unbx then Cstr_unboxed
++                 else if O.is_block obj
++                 then Cstr_block(O.tag obj)
++                 else Cstr_constant(O.obj obj)
++               in
++
++               try
++                 let lid,x_args =
++                   find_constr_by_tag tag cl in
++                 let o_arg =
++
++                   match x_args with
++                   | [{contents=Xval_record (ixl,_,_)}] ->
++                      let x = tree_of_record_fields depth ixl 0 obj unbx in
++                      Oval_constr (lid, [x])
++
++                   | _->
++                      tree_of_constr_with_args
++                        lid false 0 depth obj
++                        x_args unbx
++                 in
++                 (* Oval_constr(lid, o_args) *)
++                 o_arg
++               with
++                 Not_found ->
++                  Oval_stuff "<unknown constructor>"
++              end
++
++            | Xval_record (ixl,pos,unbx) ->
++                  tree_of_record_fields depth ixl pos obj unbx
++
++               (*
++                | {type_kind = Type_open} ->
++                    tree_of_extension path depth obj
++                *)
++
++            | Xval_variant vl ->
++               try
++                 if O.is_block obj then
++                   let tag : int = O.obj (O.field obj 0) in
++                   let lid,x_arg = List.assoc tag vl in
++                   match x_arg with 
++                   | Some x_arg ->
++                      let o_args =
++                        nest tree_of_val (depth - 1) (O.field obj 1) !x_arg
++                      in
++                      Oval_variant (lid, Some o_args)
++                   | None -> assert false
++
++                 else
++                   let tag : int = O.obj obj in
++                   let lid,x_arg = List.assoc tag vl in
++                   assert (x_arg=None);
++                   Oval_variant (lid,None)
++
++               with Not_found->
++                 Oval_stuff "<variant>"
++
++          end
++
++      and tree_of_record_fields depth x_args pos obj unboxed =
++        let rec tree_of_fields pos = function
++          | [] -> []
++          | (lid, x_arg) :: remainder ->
++              let v =
++                if unboxed then
++                  tree_of_val (depth - 1) obj !x_arg
++                else begin
++                  let fld =
++                    if O.tag obj = O.double_array_tag then
++                      O.repr (O.double_field obj pos)
++                    else
++                      O.field obj pos
++                  in
++                  nest tree_of_val (depth - 1) fld !x_arg
++                end
++              in
++              (lid, v) :: tree_of_fields (pos + 1) remainder
++        in
++        Oval_record (tree_of_fields pos x_args)
++
++      and tree_of_val_list start depth obj x_args =
++        let rec tree_list i = function
++          | [] -> []
++          | x_arg :: x_args ->
++              let tree = nest tree_of_val (depth - 1) (O.field obj i) !x_arg in
++              tree :: tree_list (i + 1) x_args in
++      tree_list start x_args
++
++      and tree_of_constr_with_args
++             lid _inlined start depth obj x_args _unboxed =
++        let o_args = tree_of_val_list start depth obj x_args in
++        Oval_constr (lid, o_args)
++
++    in
++    nest tree_of_val max_depth obj !x
++
++end
++
++
++(********************************************************************************)
++
++
++module LocalPrinter = Make(Obj)
++
++let max_printer_depth = ref 100
++let max_printer_steps = ref 300
++let ppf= ref Format.std_formatter
++
++
++(* 2-stages: 1st convert to Xval data structure, 2nd convert Xval to Oval *)
++let outval_of_value obj x =
++  LocalPrinter.outval_of_value !max_printer_steps !max_printer_depth
++    (fun _ _ _ -> None) obj x
++let print_value obj ppf x =
++  !Oprint.out_value ppf (outval_of_value obj x)
++
++
++(* the print format is limited and ugly - ideal for dissuading users from actually using this
++for anything other than debugging. *)
++external prs: string -> 'a -> unit = "%typeof"
++(* the above fake primitive gets redirected here (path with [_with_type] tacked on): *)
++let prs_with_type x s v =
++  let ppf = !ppf in
++  let unser= Marshal.from_string x 0 in
++  Format.fprintf ppf "%s =>\n" s;
++  print_value v ppf unser;
++  Format.fprintf ppf "@."
++
+diff -Nu ocaml/otherlibs/genprint/genprint.mli ../ocaml/otherlibs/genprint/genprint.mli
+--- ocaml/otherlibs/genprint/genprint.mli	1970-01-01 01:00:00.000000000 +0100
++++ ../ocaml/otherlibs/genprint/genprint.mli	2019-06-09 12:01:57.327019210 +0100
+@@ -0,0 +1,7 @@
++val max_printer_depth : int ref
++val max_printer_steps : int ref
++val ppf : Format.formatter ref
++
++(* [prs msg value] prints an arbitrary value, and <poly> for those parts yet polymorphic *)
++external prs : string -> 'a -> unit = "%typeof"
++val prs_with_type : string -> string -> Obj.t -> unit
+diff -Nu ocaml/otherlibs/genprint/Makefile ../ocaml/otherlibs/genprint/Makefile
+--- ocaml/otherlibs/genprint/Makefile	1970-01-01 01:00:00.000000000 +0100
++++ ../ocaml/otherlibs/genprint/Makefile	2019-06-09 10:26:41.444287129 +0100
+@@ -0,0 +1,89 @@
++#**************************************************************************
++#*                                                                        *
++#*                                 OCaml                                  *
++#*                                                                        *
++#*            Xavier Leroy, projet Cristal, INRIA Rocquencourt            *
++#*                                                                        *
++#*   Copyright 1999 Institut National de Recherche en Informatique et     *
++#*     en Automatique.                                                    *
++#*                                                                        *
++#*   All rights reserved.  This file is distributed under the terms of    *
++#*   the GNU Lesser General Public License version 2.1, with the          *
++#*   special exception on linking described in the file LICENSE.          *
++#*                                                                        *
++#**************************************************************************
++
++# Makefile for the genprint library
++
++LIBNAME=genprint
++CAMLOBJS=genprint.cmo
++CAMLOBJS_NAT=$(CAMLOBJS:.cmo=.cmx)
++COMPILEROBJS=../../typing/oprint.cmo 
++COMPILEROBJS_NAT=$(COMPILEROBJS:.cmo=.cmx)
++EXTRACAMLFLAGS= -I ../../parsing -I ../../typing -I ../../util -I ../../bytecomp
++
++
++#include ../Makefile
++ROOTDIR=../..
++include $(ROOTDIR)/config/Makefile
++include $(ROOTDIR)/Makefile.common
++
++CAMLRUN ?= $(ROOTDIR)/boot/ocamlrun
++
++CAMLC=$(CAMLRUN) $(ROOTDIR)/ocamlc -nostdlib -I $(ROOTDIR)/stdlib
++CAMLOPT=$(CAMLRUN) $(ROOTDIR)/ocamlopt -nostdlib \
++        -I $(ROOTDIR)/stdlib
++COMPFLAGS+= $(EXTRACAMLFLAGS)
++
++# Compilation options
++xCOMPFLAGS=-absname -w +a-4-9-41-42-44-45-48 -warn-error A -bin-annot -g \
++          -safe-string -strict-sequence -strict-formats $(EXTRACAMLFLAGS)
++
++
++
++all: $(LIBNAME).cma $(CMIFILES)
++
++allopt: $(LIBNAME).cmxa $(CMIFILES)
++
++
++genprint.cma: $(CAMLOBJS)
++	$(CAMLC) -a -o $@ \
++	         $(COMPILEROBJS) $(CAMLOBJS) $(LINKOPTS)
++
++genprint.cmxa: $(CAMLOBJS_NAT)
++	$(CAMLOPT) -a -o $@ \
++	         $(COMPILEROBJS_NAT) $(CAMLOBJS_NAT) $(LINKOPTS)
++
++install:
++	$(INSTALL_DATA) \
++	  $(LIBNAME).cma $(CMIFILES) $(CMIFILES:.cmi=.mli) \
++          $(CMIFILES:.cmi=.cmti) \
++	  "$(INSTALL_LIBDIR)/"
++
++installopt:
++	$(INSTALL_DATA) \
++	   $(CAMLOBJS_NAT) $(LIBNAME).cmxa $(LIBNAME).$(A) \
++	   "$(INSTALL_LIBDIR)/"
++	cd "$(INSTALL_LIBDIR)"; $(RANLIB) $(LIBNAME).$(A)
++
++partialclean:
++	rm -f *.cm[ioaxt] *.cmti *.cmxa
++
++clean: partialclean
++
++.SUFFIXES: .ml .mli .cmi .cmo .cmx
++
++.mli.cmi:
++	$(CAMLC) -c $(COMPFLAGS) $<
++
++.ml.cmo:
++	$(CAMLC) -c $(COMPFLAGS) $<
++
++.ml.cmx:
++	$(CAMLOPT) -c $(COMPFLAGS) $(OPTCOMPFLAGS) $<
++
++depend:
++
++include .depend
++
++
+diff -Nu ocaml/otherlibs/genprint/Makefile.nt ../ocaml/otherlibs/genprint/Makefile.nt
+--- ocaml/otherlibs/genprint/Makefile.nt	1970-01-01 01:00:00.000000000 +0100
++++ ../ocaml/otherlibs/genprint/Makefile.nt	2019-06-07 05:51:55.459916402 +0100
+@@ -0,0 +1,16 @@
++#**************************************************************************
++#*                                                                        *
++#*                                 OCaml                                  *
++#*                                                                        *
++#*            Xavier Leroy, projet Cristal, INRIA Rocquencourt            *
++#*                                                                        *
++#*   Copyright 1999 Institut National de Recherche en Informatique et     *
++#*     en Automatique.                                                    *
++#*                                                                        *
++#*   All rights reserved.  This file is distributed under the terms of    *
++#*   the GNU Lesser General Public License version 2.1, with the          *
++#*   special exception on linking described in the file LICENSE.          *
++#*                                                                        *
++#**************************************************************************
++
++include Makefile
+diff -Nu ocaml/otherlibs/genprint/.merlin ../ocaml/otherlibs/genprint/.merlin
+--- ocaml/otherlibs/genprint/.merlin	1970-01-01 01:00:00.000000000 +0100
++++ ../ocaml/otherlibs/genprint/.merlin	2019-06-06 18:48:23.519931589 +0100
+@@ -0,0 +1,2 @@
++S ../ocaml
++B ../ocaml
+--- ocaml/bytecomp/genprint0.ml	2019-06-09 12:20:29.333771119 +0100
++++ ../ocaml/bytecomp/genprint0.ml	2019-06-07 05:38:07.089916718 +0100
+@@ -0,0 +1,282 @@
++open Misc
++open Longident
++open Path
++open Types
++open Outcometree
++open Genprinti
++
++(* take in the type and its environment and produce an intermediary x_value that
++can be serialised and embedded as a lambda term into a compiled program. *)
++    let xoutval_of_value env ty =
++
++      let module TypeTbl = Hashtbl.Make(struct
++        type t = Types.type_expr
++        (* let equal = Ctype.moregeneral env false *)
++        let equal = Ctype.matches env
++        let hash x =
++          try
++            Hashtbl.hash x
++          with _exn -> 0
++      end)
++      in
++    let printers = [
++      ( Predef.type_int, Xval_int );
++      ( Predef.type_float, Xval_float );
++      ( Predef.type_char, Xval_char );
++      ( Predef.type_int32, Xval_int32 );
++      ( Predef.type_nativeint, Xval_nativeint );
++      ( Predef.type_int64, Xval_int64 );
++      ] 
++    in
++
++    let tree_of_qualified lookup_fun env ty_path name =
++      match ty_path with
++      | Pident _ ->
++          Oide_ident name
++      | Pdot(p, _s, _pos) ->
++          if try
++               match (lookup_fun (Lident name) env).desc with
++               | Tconstr(ty_path', _, _) -> Path.same ty_path ty_path'
++               | _ -> false
++             with Not_found -> false
++          then Oide_ident name
++          else Oide_dot (Printtyp.tree_of_path p, name)
++      | Papply _ ->
++          Printtyp.tree_of_path ty_path
++    in
++    let tree_of_constr =
++      tree_of_qualified
++        (fun lid env -> (Env.lookup_constructor lid env).cstr_res)
++
++    and tree_of_label =
++      tree_of_qualified (fun lid env -> (Env.lookup_label lid env).lbl_res)
++    in
++    (* An abstract type *)
++
++    let abstract_type =
++      Ctype.newty (Tconstr (Pident (Ident.create "abstract"), [], ref Mnil))
++    in
++
++
++      let types : x_value TypeTbl.t = TypeTbl.create 8 in
++
++
++      (* let nest f = nest_gen (Oval_stuff "<cycle>") f in *)
++
++      let rec tree_of_val ty : x_value =
++        let ty = Ctype.repr ty in
++
++        try 
++          TypeTbl.find types ty
++        with Not_found->
++          let cell= ref Xval_int in
++          TypeTbl.add types ty cell;
++          let x= tree_of_val' ty in
++          cell := x;
++          (* TypeTbl.remove types ty; *)
++          cell
++
++      and tree_of_val' ty =
++        let ty = Ctype.repr ty in
++
++        begin
++        try
++          find_printer env ty
++        with Not_found ->
++          match ty.desc with
++          | Tvar _ | Tunivar _ ->
++              Xval_stuff "<poly>"
++          | Tarrow _ ->
++              Xval_stuff "<fun>"
++          | Ttuple(ty_list) ->
++              Xval_tuple (tree_of_val_list 0 ty_list)
++          | Tconstr(path, [ty_arg], _)
++            when Path.same path Predef.path_list ->
++
++             Xval_list (tree_of_val ty_arg)
++
++          | Tconstr(path, [ty_arg], _)
++            when Path.same path Predef.path_array ->
++
++             Xval_array (tree_of_val ty_arg)
++
++          | Tconstr(path, [], _)
++              when Path.same path Predef.path_string ->
++            Xval_string Ostr_string
++
++          | Tconstr (path, [], _)
++              when Path.same path Predef.path_bytes ->
++             Xval_string Ostr_bytes
++
++          | Tconstr (path, [ty_arg], _)
++            when Path.same path Predef.path_lazy_t ->
++
++             let v=tree_of_val ty_arg in
++             Xval_constr ([Oide_ident "lazy", [v]], false)
++
++          | Tconstr(path, ty_list, _) -> begin
++              try
++                let decl = Env.find_type path env in
++                match decl with
++                | {type_kind = Type_abstract; type_manifest = None} ->
++                    Xval_stuff "<abstr>"
++                | {type_kind = Type_abstract; type_manifest = Some body} ->
++                    !(tree_of_val
++                      (try Ctype.apply env decl.type_params body ty_list with
++                         Ctype.Cannot_apply -> abstract_type))
++                | {type_kind = Type_variant constr_list; type_unboxed} ->
++                   let unbx = type_unboxed.unboxed in
++
++                   let extract {cd_id;cd_args;cd_res} =
++                     let type_params =
++                       match cd_res with
++                         Some t ->
++                          begin match (Ctype.repr t).desc with
++                            Tconstr (_,params,_) ->
++                             params
++                          | _ -> assert false end
++                       | None -> decl.type_params
++                     in
++                     let id,args=
++                       match cd_args with
++                       | Cstr_tuple l ->
++                          let ty_args =
++                            List.map
++                              (function ty ->
++                                         try Ctype.apply env type_params ty ty_list with
++                                           Ctype.Cannot_apply -> abstract_type)
++                              l
++                          in
++                          tree_of_constr_with_args (tree_of_constr env path)
++                            (Ident.name cd_id) false 0
++                            ty_args unbx
++                       | Cstr_record lbls ->
++                          let r =
++                            tree_of_record_fields
++                              env path type_params ty_list
++                              lbls 0 unbx
++                          in
++                          (tree_of_constr env path
++                             (Ident.name cd_id),
++                           [ ref r ])
++                     in
++                     ( id,args )
++                   in
++                   let constr_list = List.map extract constr_list in
++                   Xval_constr (constr_list,unbx)
++
++                | {type_kind = Type_record(lbl_list, rep)} ->
++                        let pos =
++                          match rep with
++                          | Record_extension -> 1
++                          | _ -> 0
++                        in
++                        let unbx =
++                          match rep with Record_unboxed _ -> true | _ -> false
++                        in
++                        tree_of_record_fields
++                          env path decl.type_params ty_list
++                          lbl_list pos unbx
++
++                | {type_kind = Type_open} ->
++                    (* tree_of_extension path depth *)
++assert false
++              with
++                Not_found ->                (* raised by Env.find_type *)
++                  Xval_stuff "<abstr>"
++              end
++          | Tvariant row ->
++             let row = Btype.row_repr row in
++             let find = fun (l,f) ->
++               let h = Btype.hash_variant l in
++               match Btype.row_field_repr f with
++               | Rpresent(Some ty) | Reither(_,[ty],_,_) ->
++                  let args =
++                    tree_of_val ty
++                  in
++                  (h,(l, Some args))
++               | _ -> (h,(l,None))
++             in
++             Xval_variant (List.map find row.row_fields)
++
++          | Tobject (_, _) ->
++              Xval_stuff "<obj>"
++          | Tsubst ty ->
++              !(tree_of_val ty)
++          | Tfield(_, _, _, _) | Tnil | Tlink _ ->
++              fatal_error "Genprint.outval_of_value"
++          | Tpoly (ty, _) ->
++              !(tree_of_val ty)
++          | Tpackage _ ->
++              Xval_stuff "<module>"
++        end
++
++      and tree_of_record_fields env path type_params ty_list 
++          lbl_list pos unboxed : x_value' =
++        let rec tree_of_fields pos = function
++          | [] -> []
++          | {ld_id; ld_type} :: remainder ->
++              let ty_arg =
++                try
++                  Ctype.apply env type_params ld_type
++                    ty_list
++                with
++                  Ctype.Cannot_apply -> abstract_type in
++              let name = Ident.name ld_id in
++              (* PR#5722: print full module path only
++                 for first record field *)
++              let lid =
++                if pos = 0 then tree_of_label env path name
++                else Oide_ident name
++              and v =
++                tree_of_val ty_arg
++              in
++              (lid, v) :: tree_of_fields (pos + 1) remainder
++        in
++        Xval_record (tree_of_fields pos lbl_list, pos, unboxed)
++
++      and tree_of_val_list _start ty_list : x_value list =
++        let rec tree_list = function
++          | [] -> []
++          | ty :: ty_list ->
++              let tree = tree_of_val ty in
++              tree :: tree_list  ty_list in
++        tree_list ty_list
++
++      and tree_of_constr_with_args
++             tree_of_cstr cstr_name inlined start ty_args unboxed =
++        let lid = tree_of_cstr cstr_name in
++        let args =
++          if inlined || unboxed then
++            match ty_args with
++            | [ty] -> [ tree_of_val ty ]
++            | _ -> assert false
++          else
++            (tree_of_val_list start ty_args : x_value list)
++        in
++        (lid, args)
++
++    and find_printer env ty =
++      let rec find = function
++      | [] -> raise Not_found
++      | (sch, printer) :: remainder ->
++          if Ctype.moregeneral env false sch ty
++          then printer
++          else find remainder
++      in
++      find printers
++
++
++    in tree_of_val ty
++
++
++let type_to_lambda (ty,env)=
++  let x_val=xoutval_of_value env ty in
++  let x_serde= Marshal.to_string x_val [] in
++(* pp "MARSHAL: %d" (String.length x_serde); *)
++  let lam = Lambda.(Lconst(Const_immstring x_serde)) in
++  (* return a serialisation of the Xval *)
++  lam
++
++let _=
++  Translprim.register_typeof_func ~path:"Genprint.prs" type_to_lambda
+--- ocaml/bytecomp/genprint0.mli	2019-06-09 12:20:29.333771119 +0100
++++ ../ocaml/bytecomp/genprint0.mli	2019-06-06 14:48:35.799937078 +0100
+@@ -0,0 +1 @@
++(*empty*)
+--- ocaml/bytecomp/genprinti.ml	2019-06-09 12:20:29.333771119 +0100
++++ ../ocaml/bytecomp/genprinti.ml	2019-06-06 12:13:10.199940635 +0100
+@@ -0,0 +1,20 @@
++open Outcometree
++
++type x_value = x_value' ref
++and x_value' =
++  | Xval_array of x_value
++  | Xval_char
++  | Xval_constr of (out_ident * x_value list) list * bool
++  | Xval_ellipsis
++  | Xval_float
++  | Xval_int
++  | Xval_int32
++  | Xval_int64
++  | Xval_nativeint
++  | Xval_list of x_value
++  | Xval_record of (out_ident * x_value) list * int * bool
++  | Xval_string of out_string (* string, size-to-print, kind *)
++  | Xval_stuff of string
++  | Xval_tuple of x_value list
++  | Xval_variant of (int * (Asttypes.label * x_value option)) list
++
+--- ocaml/configure	2019-06-09 12:17:47.244375430 +0100
++++ ../ocaml/configure	2019-06-08 19:58:52.134890710 +0100
+@@ -1236,7 +1236,7 @@
+ config UNIXLIB "$unixlib"
+ config GRAPHLIB "$graphlib"
+ 
+-otherlibraries="$unixlib str dynlink bigarray"
++otherlibraries="$unixlib str dynlink bigarray genprint"
+ 
+ # Spacetime profiling is only available for native code on 64-bit targets.
+ 

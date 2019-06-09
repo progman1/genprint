@@ -363,8 +363,8 @@ diff -Nu ocaml/otherlibs/genprint/genprint.mli ../ocaml/otherlibs/genprint/genpr
 +val prs_with_type : string -> string -> Obj.t -> unit
 diff -Nu ocaml/otherlibs/genprint/Makefile ../ocaml/otherlibs/genprint/Makefile
 --- ocaml/otherlibs/genprint/Makefile	1970-01-01 01:00:00.000000000 +0100
-+++ ../ocaml/otherlibs/genprint/Makefile	2019-06-09 10:26:41.444287129 +0100
-@@ -0,0 +1,89 @@
++++ ../ocaml/otherlibs/genprint/Makefile	2019-06-09 12:36:52.081532721 +0100
+@@ -0,0 +1,90 @@
 +#**************************************************************************
 +#*                                                                        *
 +#*                                 OCaml                                  *
@@ -397,6 +397,7 @@ diff -Nu ocaml/otherlibs/genprint/Makefile ../ocaml/otherlibs/genprint/Makefile
 +
 +CAMLRUN ?= $(ROOTDIR)/boot/ocamlrun
 +
++CMIFILES ?= $(CAMLOBJS:.cmo=.cmi)
 +CAMLC=$(CAMLRUN) $(ROOTDIR)/ocamlc -nostdlib -I $(ROOTDIR)/stdlib
 +CAMLOPT=$(CAMLRUN) $(ROOTDIR)/ocamlopt -nostdlib \
 +        -I $(ROOTDIR)/stdlib
@@ -480,7 +481,7 @@ diff -Nu ocaml/otherlibs/genprint/.merlin ../ocaml/otherlibs/genprint/.merlin
 @@ -0,0 +1,2 @@
 +S ../ocaml
 +B ../ocaml
---- ocaml/bytecomp/genprint0.ml	2019-06-09 12:20:29.333771119 +0100
+--- ocaml/bytecomp/genprint0.ml	2019-06-09 12:38:06.511300532 +0100
 +++ ../ocaml/bytecomp/genprint0.ml	2019-06-07 05:38:07.089916718 +0100
 @@ -0,0 +1,282 @@
 +open Misc
@@ -765,11 +766,11 @@ diff -Nu ocaml/otherlibs/genprint/.merlin ../ocaml/otherlibs/genprint/.merlin
 +
 +let _=
 +  Translprim.register_typeof_func ~path:"Genprint.prs" type_to_lambda
---- ocaml/bytecomp/genprint0.mli	2019-06-09 12:20:29.333771119 +0100
+--- ocaml/bytecomp/genprint0.mli	2019-06-09 12:38:06.511300532 +0100
 +++ ../ocaml/bytecomp/genprint0.mli	2019-06-06 14:48:35.799937078 +0100
 @@ -0,0 +1 @@
 +(*empty*)
---- ocaml/bytecomp/genprinti.ml	2019-06-09 12:20:29.333771119 +0100
+--- ocaml/bytecomp/genprinti.ml	2019-06-09 12:38:06.511300532 +0100
 +++ ../ocaml/bytecomp/genprinti.ml	2019-06-06 12:13:10.199940635 +0100
 @@ -0,0 +1,20 @@
 +open Outcometree

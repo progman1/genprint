@@ -1,9 +1,9 @@
-go1:
-	ocaml -noinit go.ml
+got:
+	ocaml -noinit -I +compiler-libs go.ml
 
-go2:
+gob:
 	ocamlc -o go genprint.cma go.ml && ./go
 
-go3:
-	ocamlop -o go genprint.cmxa go.ml && ./go
+goo:
+	ocamlopt -o go genprint.cmxa go.ml && ./go
 

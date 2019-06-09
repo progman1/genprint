@@ -22,7 +22,7 @@
  
  LIBFILES=stdlib.cma std_exit.cmo *.cmi camlheader
  
---- ocaml/toplevel/genprint.ml	2019-06-09 12:20:29.433770740 +0100
+--- ocaml/toplevel/genprint.ml	2019-06-09 12:38:06.591300279 +0100
 +++ ../ocaml/toplevel/genprint.ml	2019-06-09 07:32:43.507707468 +0100
 @@ -0,0 +1,43 @@
 +
@@ -68,7 +68,7 @@
 +let _=
 +  Translprim.register_typeof_func ~path:"Genprint.prs" create_key_for_type
 +
---- ocaml/toplevel/genprint.mli	2019-06-09 12:20:29.433770740 +0100
+--- ocaml/toplevel/genprint.mli	2019-06-09 12:38:06.591300279 +0100
 +++ ../ocaml/toplevel/genprint.mli	2019-06-09 07:56:16.772897149 +0100
 @@ -0,0 +1,9 @@
 +(* depth/steps initialised from Toploop versions *)

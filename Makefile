@@ -7,3 +7,7 @@ gob:
 goo:
 	ocamlopt -o go genprint.cmxa go.ml && ./go
 
+
+gon:
+	ocaml -noinit genprint.cma go.ml
+	echo No - both patches are present and 
